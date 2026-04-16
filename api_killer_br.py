@@ -1,5 +1,5 @@
 # =====================================================
-# 🧠 KELLER-BR FINAL — CORRIGIDO NÍVEL ARTIGO
+# 🧠 KELLER-BR FINAL — VERSÃO NÍVEL PUBLICAÇÃO
 # =====================================================
 
 import re
@@ -7,7 +7,7 @@ import faiss
 import torch
 import numpy as np
 
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -33,7 +33,7 @@ MAX_DOCS = 3000
 MAX_SUBFACTS = 5
 MIN_SENT_LEN = 20
 MAX_PROMPT_CASES = 3
-MAX_CASE_TEXT_CHARS = 1200
+MAX_CASE_TEXT_CHARS = 1400
 MIN_RELEVANCE_HITS = 1
 
 DEVICE_MAP = "cpu"
@@ -64,6 +64,31 @@ def log(msg: str):
 
 def log_block(title: str):
     print(f"\n================ {title} ================")
+
+# =====================================================
+# NORMALIZAÇÃO
+# =====================================================
+
+def limpar_texto(texto: Any) -> str:
+    texto = str(texto or "")
+    texto = re.sub(r"\s+", " ", texto)
+    return texto.strip()
+
+def normalizar_lower(texto: str) -> str:
+    return limpar_texto(texto).lower()
+
+def cortar_texto(texto: str, limite: int) -> str:
+    texto = limpar_texto(texto)
+    if len(texto) <= limite:
+        return texto
+    return texto[:limite].rsplit(" ", 1)[0] + "..."
+
+def sem_acentos_min(texto: str) -> str:
+    mapa = str.maketrans(
+        "áàãâäéèêëíìîïóòõôöúùûüç",
+        "aaaaaeeeeiiiiooooouuuuc"
+    )
+    return normalizar_lower(texto).translate(mapa)
 
 # =====================================================
 # MODELOS
@@ -103,16 +128,8 @@ for ds in datasets_processos:
 log(f"Total bruto de documentos: {len(DATA)}")
 
 # =====================================================
-# NORMALIZAÇÃO / EXTRAÇÃO
+# EXTRAÇÃO DE CAMPOS
 # =====================================================
-
-def limpar_texto(texto: Any) -> str:
-    texto = str(texto or "")
-    texto = re.sub(r"\s+", " ", texto)
-    return texto.strip()
-
-def normalizar_lower(texto: str) -> str:
-    return limpar_texto(texto).lower()
 
 def extrair_numero(item: Dict[str, Any], idx: int) -> str:
     return str(
@@ -141,12 +158,6 @@ def extrair_texto(item: Dict[str, Any]) -> str:
 
     return ""
 
-def cortar_texto(texto: str, limite: int) -> str:
-    texto = limpar_texto(texto)
-    if len(texto) <= limite:
-        return texto
-    return texto[:limite].rsplit(" ", 1)[0] + "..."
-
 def montar_texto_documento(item: Dict[str, Any], idx: int) -> str:
     processo = extrair_numero(item, idx)
     orgao = limpar_texto(item.get("orgao_julgador"))
@@ -167,95 +178,7 @@ def montar_texto_documento(item: Dict[str, Any], idx: int) -> str:
     return "\n".join(partes).strip()
 
 # =====================================================
-# EXTRAÇÃO DE REFERÊNCIAS LEGAIS — DIRETO DOS CASOS
-# =====================================================
-
-LEI_REGEX = re.compile(
-    r"""(?ix)
-    art\.?\s*
-    (?P<artigo>\d+[A-Za-zº°\-]*)
-    (?:\s*,\s*(?:§+\s*\d+º?)?)?
-    .*?
-    (?:lei\s*n?[ºo.]?\s*(?P<lei>\d{1,6}(?:\.\d{3})*(?:/\d{2,4})?))
-    """
-)
-
-ARTIGO_SO_REGEX = re.compile(
-    r"""(?ix)
-    \bart\.?\s*(?P<artigo>\d+[A-Za-zº°\-]*)
-    """
-)
-
-def normalizar_numero_lei(lei: str) -> str:
-    lei = limpar_texto(lei).replace(" ", "")
-    return lei
-
-def extrair_referencias_legais(texto: str) -> List[Dict[str, str]]:
-    texto = limpar_texto(texto)
-    refs = []
-    vistos = set()
-
-    for m in LEI_REGEX.finditer(texto):
-        artigo = limpar_texto(m.group("artigo"))
-        lei = normalizar_numero_lei(m.group("lei"))
-        chave = (artigo, lei)
-        if chave not in vistos:
-            vistos.add(chave)
-            refs.append({
-                "artigo": artigo,
-                "lei": lei,
-                "fonte": f"art. {artigo} da Lei {lei}"
-            })
-
-    # fallback: se vier apenas artigo no texto, sem lei explícita
-    # ainda assim registramos, mas com lei desconhecida
-    if not refs:
-        for m in ARTIGO_SO_REGEX.finditer(texto):
-            artigo = limpar_texto(m.group("artigo"))
-            chave = (artigo, "desconhecida")
-            if chave not in vistos:
-                vistos.add(chave)
-                refs.append({
-                    "artigo": artigo,
-                    "lei": "desconhecida",
-                    "fonte": f"art. {artigo}"
-                })
-
-    return refs[:20]
-
-def priorizar_referencias_legais(pergunta: str, refs: List[Dict[str, str]]) -> List[Dict[str, str]]:
-    p = normalizar_lower(pergunta)
-    if not refs:
-        return []
-
-    # para "arma de fogo", preferir Estatuto do Desarmamento 10.826/03
-    refs_10826 = []
-    refs_outros = []
-
-    for r in refs:
-        lei = r["lei"]
-        if "arma" in p or "fogo" in p:
-            if "10.826" in lei or "10826" in lei or "10.826/03" in lei:
-                refs_10826.append(r)
-            else:
-                refs_outros.append(r)
-        else:
-            refs_outros.append(r)
-
-    ordenado = refs_10826 + refs_outros
-
-    saida = []
-    vistos = set()
-    for r in ordenado:
-        chave = (r["artigo"], r["lei"])
-        if chave not in vistos:
-            vistos.add(chave)
-            saida.append(r)
-
-    return saida[:10]
-
-# =====================================================
-# SUBFATOS
+# DOMÍNIO JURÍDICO
 # =====================================================
 
 KEY_TERMS = [
@@ -274,6 +197,20 @@ ARM_TERMS = [
     "armamento", "disparo", "acessório", "acessorio",
 ]
 
+TRAFICO_TERMS = [
+    "tráfico", "trafico", "entorpecente", "entorpecentes", "maconha",
+    "cocaína", "cocaina", "lei de drogas", "associação para o tráfico",
+    "associacao para o trafico", "balança de precisão", "balanca de precisao"
+]
+
+def eh_query_arma(pergunta: str) -> bool:
+    p = sem_acentos_min(pergunta)
+    return "arma" in p or "fogo" in p or "municao" in p or "munição" in p
+
+# =====================================================
+# SENTENÇAS E SUBFATOS
+# =====================================================
+
 def split_sentencas(texto: str) -> List[str]:
     texto = limpar_texto(texto)
     if not texto:
@@ -290,13 +227,13 @@ def split_sentencas(texto: str) -> List[str]:
     return sentencas
 
 def score_sentenca(sentenca: str, pergunta: str = "") -> int:
-    s_lower = sentenca.lower()
-    p_lower = (pergunta or "").lower()
+    s_lower = sem_acentos_min(sentenca)
+    p_lower = sem_acentos_min(pergunta)
 
     score = 0
 
     for termo in KEY_TERMS:
-        if termo in s_lower:
+        if sem_acentos_min(termo) in s_lower:
             score += 2
 
     for token in re.findall(r"\w+", p_lower):
@@ -306,13 +243,13 @@ def score_sentenca(sentenca: str, pergunta: str = "") -> int:
     if re.search(r"\bart\.?\s*\d+", s_lower):
         score += 2
 
-    if ("arma" in p_lower or "fogo" in p_lower) and any(t in s_lower for t in ARM_TERMS):
+    if eh_query_arma(pergunta) and any(sem_acentos_min(t) in s_lower for t in ARM_TERMS):
         score += 6
 
     return score
 
 def expandir_query_subfatos(pergunta: str) -> List[str]:
-    p = pergunta.lower()
+    p = sem_acentos_min(pergunta)
     subfatos = [pergunta]
 
     if "arma" in p or "fogo" in p:
@@ -356,10 +293,7 @@ def gerar_subfatos(texto: str, pergunta: str = "", is_query: bool = False) -> Li
         print(f"Subfato 1: {fallback}")
         return [fallback]
 
-    pontuadas = []
-    for s in sentencas:
-        pontuadas.append((score_sentenca(s, pergunta), s))
-
+    pontuadas = [(score_sentenca(s, pergunta), s) for s in sentencas]
     pontuadas.sort(key=lambda x: x[0], reverse=True)
 
     subfatos = []
@@ -399,7 +333,7 @@ def embed(textos: List[str]) -> np.ndarray:
     return emb.astype("float32")
 
 # =====================================================
-# SCORE
+# SCORE MAXSIM + SUM
 # =====================================================
 
 def score_maxsim_sum(q_emb: np.ndarray, d_emb: np.ndarray) -> float:
@@ -416,40 +350,197 @@ def score_maxsim_sum(q_emb: np.ndarray, d_emb: np.ndarray) -> float:
     return s
 
 # =====================================================
-# FILTRO LEVE DE CONTEXTO
+# EXTRAÇÃO LEGAL ROBUSTA
 # =====================================================
+
+LEI_PATTERN = re.compile(
+    r"lei\s*(?:n[ºo°.]?\s*)?(?P<lei>\d{1,6}(?:\.\d{3})*(?:/\d{2,4})?)",
+    flags=re.IGNORECASE
+)
+
+ARTIGO_PATTERN = re.compile(
+    r"\bart(?:\.|igo)?\s*(?P<artigo>\d+[A-Za-zº°\-]*)",
+    flags=re.IGNORECASE
+)
+
+def normalizar_numero_lei(lei: str) -> str:
+    lei = limpar_texto(lei).replace(" ", "")
+    lei = lei.replace("nº", "").replace("n°", "").replace("no", "")
+    return lei
+
+def extrair_referencias_legais(texto: str) -> List[Dict[str, str]]:
+    """
+    Estratégia robusta:
+    - divide em sentenças
+    - procura artigo e lei na MESMA sentença
+    - só associa artigo à lei se a distância textual for curta
+    - fallback só com artigo, sem inventar lei
+    """
+    sentencas = split_sentencas(texto)
+    refs = []
+    vistos = set()
+
+    for sent in sentencas:
+        sent_limpa = limpar_texto(sent)
+
+        artigos = list(ARTIGO_PATTERN.finditer(sent_limpa))
+        leis = list(LEI_PATTERN.finditer(sent_limpa))
+
+        if artigos and leis:
+            for a in artigos:
+                for l in leis:
+                    dist = abs(a.start() - l.start())
+                    if dist <= 90:
+                        artigo = limpar_texto(a.group("artigo"))
+                        lei = normalizar_numero_lei(l.group("lei"))
+                        chave = (artigo, lei)
+                        if chave not in vistos:
+                            vistos.add(chave)
+                            refs.append({
+                                "artigo": artigo,
+                                "lei": lei,
+                                "fonte": f"art. {artigo} da Lei {lei}"
+                            })
+
+        elif artigos:
+            for a in artigos:
+                artigo = limpar_texto(a.group("artigo"))
+                chave = (artigo, "desconhecida")
+                if chave not in vistos:
+                    vistos.add(chave)
+                    refs.append({
+                        "artigo": artigo,
+                        "lei": "desconhecida",
+                        "fonte": f"art. {artigo}"
+                    })
+
+    return refs[:25]
+
+def filtrar_referencias_para_query(pergunta: str, refs: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    if not refs:
+        return []
+
+    if not eh_query_arma(pergunta):
+        saida = []
+        vistos = set()
+        for r in refs:
+            chave = (r["artigo"], r["lei"])
+            if chave not in vistos:
+                vistos.add(chave)
+                saida.append(r)
+        return saida[:10]
+
+    refs_firearm = []
+    refs_fallback = []
+
+    for r in refs:
+        lei = r["lei"]
+        artigo = r["artigo"]
+
+        # Estatuto do Desarmamento
+        if "10.826" in lei or "10826" in lei:
+            refs_firearm.append(r)
+            continue
+
+        # artigos sem lei explícita, mas potencialmente úteis
+        if lei == "desconhecida" and artigo in {"12", "14", "16", "17", "18"}:
+            refs_fallback.append(r)
+
+    ordenado = refs_firearm + refs_fallback
+
+    saida = []
+    vistos = set()
+    for r in ordenado:
+        chave = (r["artigo"], r["lei"])
+        if chave not in vistos:
+            vistos.add(chave)
+            saida.append(r)
+
+    return saida[:10]
+
+# =====================================================
+# FILTRO SEMÂNTICO DE DOMÍNIO
+# =====================================================
+
+def contar_hits(texto: str, termos: List[str]) -> int:
+    t = sem_acentos_min(texto)
+    return sum(1 for termo in termos if sem_acentos_min(termo) in t)
+
+def penalidade_trafico_em_query_arma(texto: str) -> float:
+    t = sem_acentos_min(texto)
+    hits_trafico = sum(1 for termo in TRAFICO_TERMS if sem_acentos_min(termo) in t)
+    hits_arma = sum(1 for termo in ARM_TERMS if sem_acentos_min(termo) in t)
+
+    if hits_trafico >= 2 and hits_arma <= 2:
+        return 0.75
+    if hits_trafico >= 3:
+        return 0.60
+    return 1.0
 
 def doc_relevante_para_query(pergunta: str, subfatos_doc: List[str], refs_legais: List[Dict[str, str]]) -> bool:
-    p = pergunta.lower()
-    texto_doc = " ".join(subfatos_doc).lower()
+    p = sem_acentos_min(pergunta)
+    texto_doc = " ".join(subfatos_doc)
+    texto_doc_norm = sem_acentos_min(texto_doc)
 
-    termos_query = [
-        token for token in re.findall(r"\w+", p)
-        if len(token) >= 4
-    ]
+    termos_query = [token for token in re.findall(r"\w+", p) if len(token) >= 4]
+    hits_query = sum(1 for t in termos_query if t in texto_doc_norm)
 
-    hits = sum(1 for t in termos_query if t in texto_doc)
+    if eh_query_arma(pergunta):
+        has_arm = any(sem_acentos_min(x) in texto_doc_norm for x in ARM_TERMS)
+        has_lei_arma = any(("10.826" in r["lei"] or "10826" in r["lei"]) for r in refs_legais)
+        return has_arm or has_lei_arma or hits_query >= MIN_RELEVANCE_HITS
 
-    if "arma" in p or "fogo" in p:
-        has_arm = any(x in texto_doc for x in ARM_TERMS)
-        has_desarmamento = any("10.826" in r["lei"] or "10826" in r["lei"] for r in refs_legais)
-        return has_arm or has_desarmamento or hits >= MIN_RELEVANCE_HITS
+    return hits_query >= MIN_RELEVANCE_HITS
 
-    return hits >= MIN_RELEVANCE_HITS
+def classificar_tipo_documento(subfatos_doc: List[str], refs_legais: List[Dict[str, str]]) -> str:
+    texto = " ".join(subfatos_doc)
+    t = sem_acentos_min(texto)
+
+    if any(("10.826" in r["lei"] or "10826" in r["lei"]) for r in refs_legais):
+        if "porte" in t:
+            return "porte_arma"
+        if "posse" in t:
+            return "posse_arma"
+        return "arma"
+
+    if any(sem_acentos_min(x) in t for x in TRAFICO_TERMS):
+        return "trafico"
+
+    if "roubo" in t and "arma" in t:
+        return "roubo_com_arma"
+
+    return "geral"
+
+def bonus_tipo_documento(pergunta: str, subfatos_doc: List[str], refs_legais: List[Dict[str, str]]) -> float:
+    if not eh_query_arma(pergunta):
+        return 1.0
+
+    tipo = classificar_tipo_documento(subfatos_doc, refs_legais)
+
+    if tipo in {"posse_arma", "porte_arma", "arma"}:
+        return 1.12
+
+    if tipo == "roubo_com_arma":
+        return 1.03
+
+    if tipo == "trafico":
+        return 0.70
+
+    return 1.0
 
 # =====================================================
-# RESUMO DE CASO PARA LLM
+# RESUMO DE CASOS
 # =====================================================
 
 def montar_resumo_caso_llm(item_ranking: Dict[str, Any]) -> str:
     processo = item_ranking["processo"]
-    score = round(float(item_ranking["score"]), 4)
+    score = round(float(item_ranking["score_final"]), 4)
     subfatos = item_ranking["subfatos"][:3]
     refs = item_ranking.get("refs_legais", [])[:3]
 
     partes = [
         f"Processo: {processo}",
-        f"Score: {score}",
+        f"Score final: {score}",
         "Trechos-chave:"
     ]
 
@@ -457,7 +548,7 @@ def montar_resumo_caso_llm(item_ranking: Dict[str, Any]) -> str:
         partes.append(f"- {sf}")
 
     if refs:
-        partes.append("Referências legais encontradas:")
+        partes.append("Referências legais:")
         for r in refs:
             if r["lei"] != "desconhecida":
                 partes.append(f"- art. {r['artigo']} da Lei {r['lei']}")
@@ -470,45 +561,72 @@ def montar_resumo_caso_llm(item_ranking: Dict[str, Any]) -> str:
 # FALLBACK DETERMINÍSTICO
 # =====================================================
 
-def gerar_resposta_fallback(pergunta: str, ranking: List[Dict[str, Any]], refs: List[Dict[str, str]]) -> str:
+def detectar_enquadramento_fallback(pergunta: str, ranking: List[Dict[str, Any]], refs: List[Dict[str, str]]) -> Tuple[str, str, str, str]:
     if not ranking:
         return (
-            "Não encontrei casos suficientes para responder com segurança. "
-            "A consulta ficou ambígua e precisa de mais contexto."
+            "ambíguo",
+            "não identificado com segurança",
+            "indeterminado",
+            "baixa"
         )
 
-    top1 = ranking[0]
-    top_refs = top1.get("refs_legais", [])
+    top = ranking[0]
+    texto = sem_acentos_min(" ".join(top.get("subfatos", [])))
 
-    artigo_txt = "não identificado com segurança"
-    if top_refs:
-        r = top_refs[0]
+    enquadramento = "delito envolvendo arma de fogo"
+    papel = "a arma aparece como objeto material do delito"
+    pena = "depende do enquadramento específico"
+    certeza = "média"
+
+    if "posse" in texto and ("uso permitido" in texto or "arma de fogo" in texto):
+        enquadramento = "posse irregular de arma de fogo"
+        papel = "a arma funciona como objeto material do crime"
+        pena = "em tese, detenção de 1 a 3 anos e multa"
+        certeza = "alta"
+
+    elif "porte" in texto and ("uso permitido" in texto or "arma de fogo" in texto):
+        enquadramento = "porte ilegal de arma de fogo"
+        papel = "a arma funciona como objeto material do crime"
+        pena = "em tese, reclusão de 2 a 4 anos e multa"
+        certeza = "alta"
+
+    elif "municao" in texto or "munição" in texto or "acessorio" in texto or "acessório" in texto:
+        enquadramento = "posse ilegal de munição/acessório de arma de fogo"
+        papel = "arma, munição ou acessório integram o núcleo do tipo"
+        pena = "depende se o caso é de uso permitido ou restrito"
+        certeza = "média-alta"
+
+    elif "roubo" in texto and "arma" in texto:
+        enquadramento = "roubo com emprego de arma de fogo"
+        papel = "a arma atua como majorante"
+        pena = "depende da forma do roubo e do aumento aplicado"
+        certeza = "média"
+
+    base = "não identificada com segurança"
+    if refs:
+        r = refs[0]
         if r["lei"] != "desconhecida":
-            artigo_txt = f"art. {r['artigo']} da Lei {r['lei']}"
+            base = f"art. {r['artigo']} da Lei {r['lei']}"
         else:
-            artigo_txt = f"art. {r['artigo']}"
+            base = f"art. {r['artigo']}"
 
-    classificacao = "há ambiguidade"
-    p = pergunta.lower()
-    texto_top = " ".join(top1.get("subfatos", [])).lower()
+    return enquadramento, base, papel, pena, certeza
 
-    if "posse" in texto_top:
-        classificacao = "o contexto aponta mais para posse irregular/ilegal de arma de fogo"
-    elif "porte" in texto_top:
-        classificacao = "o contexto aponta mais para porte ilegal de arma de fogo"
-    elif "roubo" in texto_top and "arma" in texto_top:
-        classificacao = "o contexto aponta para roubo com emprego de arma de fogo"
-    elif "arma" in texto_top:
-        classificacao = "o contexto aponta genericamente para delito envolvendo arma de fogo"
+def gerar_resposta_fallback(pergunta: str, ranking: List[Dict[str, Any]], refs: List[Dict[str, str]]) -> str:
+    enquadramento, base, papel, pena, certeza = detectar_enquadramento_fallback(pergunta, ranking, refs)
 
-    resposta = (
-        f"Com base nos casos recuperados, {classificacao}. "
-        f"A referência legal mais provável no material recuperado é {artigo_txt}. "
-        f"Como a pergunta é genérica ('{pergunta}'), a resposta ainda tem ambiguidade "
-        f"entre posse, porte ou uso da arma em outro crime."
+    observacao = "Há ambiguidade residual porque a pergunta é genérica."
+    if certeza == "alta":
+        observacao = "Os casos recuperados convergem para esse enquadramento com boa consistência."
+
+    return (
+        "Resposta final:\n"
+        f"- Enquadramento provável: {enquadramento}.\n"
+        f"- Base legal provável: {base}.\n"
+        f"- Papel da arma de fogo: {papel}.\n"
+        f"- Pena em tese: {pena}.\n"
+        f"- Grau de certeza: {certeza}. {observacao}"
     )
-
-    return resposta
 
 # =====================================================
 # LLM
@@ -516,22 +634,28 @@ def gerar_resposta_fallback(pergunta: str, ranking: List[Dict[str, Any]], refs: 
 
 def resposta_llm_valida(texto: str) -> bool:
     t = limpar_texto(texto)
-    if len(t) < 40:
+    if len(t) < 60:
         return False
 
-    lixos = [
-        "Processo:",
+    lixo = [
         "Órgão julgador:",
         "Relator:",
         "Data de publicação:",
-        "Ementa:"
+        "Ementa:",
+        "Processo:"
     ]
-
-    hits_lixo = sum(1 for x in lixos if x in t)
-    if hits_lixo >= 3:
+    if sum(1 for x in lixo if x in t) >= 3:
         return False
 
-    return True
+    campos_esperados = [
+        "Enquadramento provável",
+        "Base legal provável",
+        "Papel da arma de fogo",
+        "Pena em tese",
+        "Grau de certeza"
+    ]
+    hits = sum(1 for c in campos_esperados if c in t)
+    return hits >= 4
 
 def gerar_prompt_llm(pergunta: str, ranking: List[Dict[str, Any]], refs: List[Dict[str, str]]) -> str:
     casos = "\n\n".join([montar_resumo_caso_llm(r) for r in ranking[:MAX_PROMPT_CASES]])
@@ -547,18 +671,27 @@ def gerar_prompt_llm(pergunta: str, ranking: List[Dict[str, Any]], refs: List[Di
     return f"""
 Você é um especialista em direito penal brasileiro.
 
-Responda SOMENTE com análise jurídica objetiva, sem copiar ementas, sem repetir textos dos casos, sem continuar trechos do contexto.
+Sua tarefa é responder com precisão técnica e sem copiar ementas.
+Use apenas os casos e referências abaixo.
 
-Pergunta:
+Pergunta do usuário:
 {pergunta}
 
 Casos recuperados:
 {casos}
 
-Referências legais extraídas dos casos:
+Referências legais extraídas:
 {refs_txt}
 
-Responda EXATAMENTE neste formato:
+Instruções:
+1. Identifique o enquadramento mais provável.
+2. Diferencie posse, porte e uso de arma em outro crime.
+3. Só mencione artigo se houver apoio nos casos.
+4. Não misture Lei de Drogas se a pergunta estiver centrada em arma de fogo.
+5. Seja técnico, curto e objetivo.
+6. Máximo de 8 linhas.
+
+Responda exatamente neste formato:
 
 Resposta final:
 - Enquadramento provável:
@@ -566,13 +699,6 @@ Resposta final:
 - Papel da arma de fogo:
 - Pena em tese:
 - Grau de certeza:
-
-Regras:
-- Use apenas o contexto recuperado.
-- Se houver ambiguidade entre posse, porte ou uso da arma em outro crime, diga isso claramente.
-- Não invente artigo.
-- Não copie integralmente ementas.
-- Máximo de 8 linhas.
 """.strip()
 
 def gerar_resposta_llm(pergunta: str, ranking: List[Dict[str, Any]], refs: List[Dict[str, str]]) -> str:
@@ -580,7 +706,6 @@ def gerar_resposta_llm(pergunta: str, ranking: List[Dict[str, Any]], refs: List[
 
     prompt = gerar_prompt_llm(pergunta, ranking, refs)
 
-    # Tenta usar chat template se existir
     try:
         messages = [{"role": "user", "content": prompt}]
         model_inputs = tokenizer.apply_chat_template(
@@ -607,7 +732,6 @@ def gerar_resposta_llm(pergunta: str, ranking: List[Dict[str, Any]], refs: List[
         attention_mask=attention_mask,
         max_new_tokens=180,
         do_sample=False,
-        temperature=0.0,
         top_p=1.0,
         pad_token_id=tokenizer.pad_token_id,
         eos_token_id=tokenizer.eos_token_id,
@@ -620,14 +744,12 @@ def gerar_resposta_llm(pergunta: str, ranking: List[Dict[str, Any]], refs: List[
     print("\n📤 RESPOSTA BRUTA LLM:")
     print(resposta)
 
-    if "Resposta final:" in resposta:
-        resposta = resposta.split("Resposta final:", 1)[1].strip()
-        resposta = "Resposta final:\n" + resposta
+    if "Resposta final:" not in resposta and "Resposta:" in resposta:
+        resposta = resposta.replace("Resposta:", "Resposta final:", 1)
 
     if not resposta_llm_valida(resposta):
         print("⚠️ Saída do LLM inválida. Aplicando fallback determinístico.")
-        fallback = gerar_resposta_fallback(pergunta, ranking, refs)
-        return f"Resposta final:\n{fallback}"
+        return gerar_resposta_fallback(pergunta, ranking, refs)
 
     return resposta
 
@@ -690,6 +812,25 @@ index.add(DOC_VEC)
 log("FAISS PRONTO")
 
 # =====================================================
+# PÓS-PROCESSAMENTO DO RANKING
+# =====================================================
+
+def score_final_documento(pergunta: str, score_maxsim: float, subfatos_doc: List[str], refs_legais: List[Dict[str, str]]) -> float:
+    bonus = bonus_tipo_documento(pergunta, subfatos_doc, refs_legais)
+    penal = 1.0
+
+    if eh_query_arma(pergunta):
+        penal = penalidade_trafico_em_query_arma(" ".join(subfatos_doc))
+
+    return float(score_maxsim * bonus * penal)
+
+def selecionar_refs_do_ranking(pergunta: str, ranking: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+    refs = []
+    for item in ranking:
+        refs.extend(item.get("refs_legais", []))
+    return filtrar_referencias_para_query(pergunta, refs)
+
+# =====================================================
 # PIPELINE
 # =====================================================
 
@@ -720,7 +861,7 @@ def pipeline(pergunta: str) -> Dict[str, Any]:
         print(f"Candidato {pos+1}: {meta['processo']} | score_faiss={float(D[0][pos])}")
 
         if not doc_relevante_para_query(pergunta, sub_doc, refs_legais):
-            print("   ↳ descartado pelo filtro leve de contexto")
+            print("   ↳ descartado pelo filtro de contexto")
             continue
 
         candidatos.append(idx_doc)
@@ -731,30 +872,34 @@ def pipeline(pergunta: str) -> Dict[str, Any]:
 
     # 4. Reranking MAXSIM + SUM
     resultados = []
-    refs_encontradas = []
 
     print("\n[RERANK] MAXSIM + SUM")
     for idx_doc in candidatos:
-        d_sub = DOC_SUB[idx_doc]
         d_emb = DOC_SUB_EMB[idx_doc]
-        s = score_maxsim_sum(q_emb, d_emb)
-
+        d_sub = DOC_SUB[idx_doc]
         meta = DOC_META[idx_doc]
-        refs_encontradas.extend(meta["refs_legais"])
+
+        s_maxsim = score_maxsim_sum(q_emb, d_emb)
+        s_final = score_final_documento(pergunta, s_maxsim, d_sub, meta["refs_legais"])
+        tipo_doc = classificar_tipo_documento(d_sub, meta["refs_legais"])
+
+        print(f"[AJUSTE DOMÍNIO] tipo={tipo_doc} | score_base={s_maxsim:.4f} | score_final={s_final:.4f}")
 
         resultados.append({
             "id": int(idx_doc),
             "processo": meta["processo"],
-            "score": float(s),
+            "score": float(s_maxsim),
+            "score_final": float(s_final),
+            "tipo_documento": tipo_doc,
             "texto": meta["texto_curto"],
             "subfatos": d_sub,
             "refs_legais": meta["refs_legais"],
         })
 
-    ranking = sorted(resultados, key=lambda x: x["score"], reverse=True)
+    ranking = sorted(resultados, key=lambda x: x["score_final"], reverse=True)
 
-    # 5. Referências legais
-    refs_priorizadas = priorizar_referencias_legais(pergunta, refs_encontradas)
+    # 5. Referências legais focadas no ranking final
+    refs_priorizadas = selecionar_refs_do_ranking(pergunta, ranking[:TOP_K])
 
     # 6. Resposta final do LLM
     resposta_llm = gerar_resposta_llm(pergunta, ranking[:TOP_K], refs_priorizadas)
