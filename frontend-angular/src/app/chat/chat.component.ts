@@ -2,87 +2,100 @@ import { Component } from '@angular/core';
 import { KellerService, ConsultaResponse } from '../services/keller.service';
 
 interface HistoricoItem {
- titulo: string;
- pergunta: string;
- data: Date;
+  titulo: string;
+  pergunta: string;
+  data: Date;
 }
 
 interface Mensagem {
- tipo: 'user' | 'assistant';
- pergunta?: string;
- resposta?: ConsultaResponse;
- texto?: string;
+  tipo: 'user' | 'assistant';
+  texto?: string;
+  resposta?: ConsultaResponse;
 }
 
 @Component({
- selector: 'app-chat',
- templateUrl: './chat.component.html',
- styleUrls: ['./chat.component.css']
+  selector: 'app-chat',
+  templateUrl: './chat.component.html',
+  styleUrls: ['./chat.component.css']
 })
 export class ChatComponent {
- pergunta = '';
- carregando = false;
 
- historico: HistoricoItem[] = [];
- mensagens: Mensagem[] = [
-  {
-   tipo: 'assistant',
-   texto: 'Olá. Envie uma consulta jurídica para eu gerar subfatos e ranking dos casos.'
-  }
- ];
+  pergunta = '';
+  carregando = false;
 
- constructor(private kellerService: KellerService) {}
+  historico: HistoricoItem[] = [];
 
- enviarPergunta(): void {
-  const texto = this.pergunta.trim();
-  if (!texto || this.carregando) {
-   return;
-  }
+  mensagens: Mensagem[] = [
+    {
+      tipo: 'assistant',
+      texto: 'Olá. Envie uma consulta jurídica para gerar subfatos e ranking dos processos.'
+    }
+  ];
 
-  this.mensagens.push({
-   tipo: 'user',
-   texto
-  });
+  constructor(private kellerService: KellerService) {}
 
-  this.historico.unshift({
-   titulo: texto.length > 40 ? texto.slice(0, 40) + '...' : texto,
-   pergunta: texto,
-   data: new Date()
-  });
+  enviarPergunta(): void {
 
-  this.carregando = true;
-  this.pergunta = '';
+    const texto = this.pergunta.trim();
 
-  this.kellerService.consultar(texto).subscribe({
-   next: (res) => {
+    if (!texto || this.carregando) return;
+
+    // mensagem usuário
     this.mensagens.push({
-     tipo: 'assistant',
-     resposta: res
+      tipo: 'user',
+      texto
     });
-    this.carregando = false;
-   },
-   error: (err) => {
-    const detalhe =
-        err?.error?.detail ||
-        err?.error?.mensagem ||
-        'Erro ao consultar o endpoint.';
-    this.mensagens.push({
-     tipo: 'assistant',
-     texto: detalhe
+
+    // histórico
+    this.historico.unshift({
+      titulo: texto.length > 40 ? texto.slice(0, 40) + '...' : texto,
+      pergunta: texto,
+      data: new Date()
     });
-    this.carregando = false;
-   }
-  });
- }
 
- repetirPesquisa(item: HistoricoItem): void {
-  this.pergunta = item.pergunta;
- }
+    this.carregando = true;
+    this.pergunta = '';
 
- enviarComEnter(event: KeyboardEvent): void {
-  if (event.key === 'Enter' && !event.shiftKey) {
-   event.preventDefault();
-   this.enviarPergunta();
+    this.kellerService.consultar(texto).subscribe({
+
+      next: (res) => {
+
+        console.log('🔥 RESPOSTA API:', res);
+
+        this.mensagens.push({
+          tipo: 'assistant',
+          resposta: res
+        });
+
+        this.carregando = false;
+      },
+
+      error: (err) => {
+
+        const detalhe =
+          err?.error?.detail ||
+          err?.error?.mensagem ||
+          'Erro ao consultar o endpoint.';
+
+        this.mensagens.push({
+          tipo: 'assistant',
+          texto: detalhe
+        });
+
+        this.carregando = false;
+      }
+
+    });
   }
- }
+
+  repetirPesquisa(item: HistoricoItem): void {
+    this.pergunta = item.pergunta;
+  }
+
+  enviarComEnter(event: KeyboardEvent): void {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      this.enviarPergunta();
+    }
+  }
 }

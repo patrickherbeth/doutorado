@@ -1,9 +1,8 @@
 <div class="layout">
+
     <aside class="sidebar">
 
-        <!-- 🔥 HEADER COM LOGO -->
         <div class="sidebar-header">
-
             <div class="logo-container">
                 <img src="assets/tjmg-logo.png" alt="TJMG">
                 <span class="logo-text">KELLER TJMG</span>
@@ -15,33 +14,38 @@
         </div>
 
         <div class="sidebar-history">
+
             <div class="sidebar-title">Pesquisas</div>
 
             <button
-                    type="button"
-                    class="history-item"
-                    *ngFor="let item of historico"
-                    (click)="repetirPesquisa(item)">
+                type="button"
+                class="history-item"
+                *ngFor="let item of historico"
+                (click)="repetirPesquisa(item)">
 
                 <div class="history-title">{{ item.titulo }}</div>
                 <div class="history-date">
                     {{ item.data | date:'dd/MM/yyyy HH:mm' }}
                 </div>
+
             </button>
 
             <div class="history-empty" *ngIf="historico.length === 0">
                 Nenhuma pesquisa ainda.
             </div>
+
         </div>
+
     </aside>
 
     <main class="main">
+
         <div class="messages">
 
             <div
-                    class="message-row"
-                    *ngFor="let msg of mensagens"
-                    [ngClass]="msg.tipo === 'user' ? 'row-user' : 'row-assistant'">
+                class="message-row"
+                *ngFor="let msg of mensagens"
+                [ngClass]="msg.tipo === 'user' ? 'row-user' : 'row-assistant'">
 
                 <div class="avatar" [ngClass]="msg.tipo">
                     {{ msg.tipo === 'user' ? 'P' : 'K' }}
@@ -55,6 +59,7 @@
 
                     <ng-container *ngIf="msg.resposta">
 
+                        <!-- PERGUNTA -->
                         <div class="response-block">
                             <div class="response-title">Pergunta</div>
                             <div class="response-text">
@@ -62,6 +67,15 @@
                             </div>
                         </div>
 
+                        <!-- LLM -->
+                        <div class="response-block">
+                            <div class="response-title">Análise Jurídica (LLM)</div>
+                            <div class="response-text">
+                                {{ msg.resposta.resposta_llm }}
+                            </div>
+                        </div>
+
+                        <!-- SUBFATOS -->
                         <div class="response-block">
                             <div class="response-title">Subfatos</div>
                             <div class="chip-list">
@@ -71,17 +85,19 @@
                             </div>
                         </div>
 
+                        <!-- RANKING -->
                         <div class="response-block">
-                            <div class="response-title">Resultados</div>
+                            <div class="response-title">Ranking de Processos</div>
 
                             <div class="result-card" *ngFor="let item of msg.resposta.ranking">
 
                                 <div class="result-top">
                                     <div class="result-id">
-                                        Documento {{ item.id }}
+                                        Processo {{ item.processo }}
                                     </div>
+
                                     <div class="result-score">
-                                        Score {{ item.score }}
+                                        Score {{ item.score | number:'1.2-4' }}
                                     </div>
                                 </div>
 
@@ -96,34 +112,36 @@
                                 </div>
 
                             </div>
+
                         </div>
 
                     </ng-container>
 
                 </div>
+
             </div>
 
             <div class="loading" *ngIf="carregando">
                 Consultando endpoint...
             </div>
+
         </div>
 
-        <!-- 🔥 INPUT ESTILO CHATGPT -->
         <div class="composer-wrapper">
             <div class="composer">
 
                 <textarea
-                        [(ngModel)]="pergunta"
-                        (keydown)="enviarComEnter($event)"
-                        placeholder="Envie uma consulta jurídica"
-                        rows="1">
+                    [(ngModel)]="pergunta"
+                    (keydown)="enviarComEnter($event)"
+                    placeholder="Envie uma consulta jurídica"
+                    rows="1">
                 </textarea>
 
                 <button
-                        type="button"
-                        class="send-btn"
-                        (click)="enviarPergunta()"
-                        [disabled]="carregando || !pergunta.trim()">
+                    type="button"
+                    class="send-btn"
+                    (click)="enviarPergunta()"
+                    [disabled]="carregando || !pergunta.trim()">
                     ↑
                 </button>
 
@@ -131,4 +149,5 @@
         </div>
 
     </main>
+
 </div>

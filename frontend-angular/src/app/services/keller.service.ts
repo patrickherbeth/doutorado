@@ -4,6 +4,7 @@ import { Observable } from 'rxjs';
 
 export interface RankingItem {
     id: number;
+    processo: string;
     score: number;
     texto: string;
     subfatos: string[];
@@ -19,6 +20,7 @@ export interface ConsultaResponse {
     providedIn: 'root'
 })
 export class KellerService {
+
     private readonly apiUrl = 'http://localhost:8000/api/keller/consulta';
 
     constructor(private http: HttpClient) {}
